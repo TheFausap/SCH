@@ -24,13 +24,14 @@
 #include <complex.h>
 
 #define BUFFER_MAX 1000 /* max string length */
+#define STACK_MAX 2048   /* VM Size */
 
 #define add_procedure(scheme_name, c_name)    \
     define_var(make_symbol(scheme_name),      \
                     make_primitive(c_name),   \
                     env);
 
- /**************************** MODEL ******************************/
+/**************************** MODEL ******************************/
 
 typedef enum {
     BOOLEAN, FIXNUM, CHARACTER, FLONUM,
@@ -47,6 +48,8 @@ typedef double complex sComplex;
 
 typedef struct object {
     object_type type;
+    unsigned char marked;
+    struct object* next;
     union {
         struct {
             char value;
@@ -91,7 +94,71 @@ typedef struct object {
     } data;
 } object;
 
-/* no GC so truely "unlimited extent" */
+typedef struct {
+    object* firstObject;
+    object* stack[STACK_MAX];
+    int stackSize;
+} VM;
+
+VM* newVM(void) {
+    VM* vm = malloc(sizeof(VM));
+
+    if (vm) {
+        vm->stackSize = 0;
+        vm->firstObject = NULL;
+    }
+    else {
+        fprintf(stderr, "*** cannot allocate VM for the stack\n");
+    }
+    return vm;
+}
+
+void push(VM* vm, object* val) {
+    if (vm->stackSize >= STACK_MAX) {
+        fprintf(stderr, "*** STACK OVERFLOW\n");
+        exit(1);
+    }
+    else {
+        vm->stack[vm->stackSize++] = val;
+    }
+}
+
+object* pop(VM* vm) {
+    if (vm->stackSize <= 0) {
+        fprintf(stderr, "*** STACK UNDERFLOW\n");
+        exit(1);
+    }
+    else {
+        return vm->stack[--vm->stackSize];
+    }
+}
+
+void mark(object* obj) {
+
+    if (obj->marked) return;
+
+    obj->marked = 1;
+
+    if (obj->type == PAIR) {
+        mark(obj->data.pair.car);
+        mark(obj->data.pair.cdr);
+    }
+    else if (obj->type == PRIMITIVE_PROC) {
+        mark(obj->data.primitive_proc.fn);
+    }
+    else if (obj->type == COMPOUND_PROC) {
+        mark(obj->data.compound_proc.body);
+        mark(obj->data.compound_proc.env);
+        mark(obj->data.compound_proc.params);
+    }
+}
+
+void markAll(VM* vm) {
+    for (int i = 0; i < vm->stackSize; i++) {
+        mark(vm->stack[i]);
+    }
+}
+
 object* alloc_object(void) {
     object* obj;
 
@@ -100,6 +167,9 @@ object* alloc_object(void) {
         fprintf(stderr, "out of memory\n");
         exit(1);
     }
+    obj->marked = 0;
+    the_vm->firstObject = obj;
+
     return obj;
 }
 
@@ -126,10 +196,12 @@ object* or_symbol;
 object* eof_object;
 object* the_empty;
 object* the_global;
+VM* the_vm;
 
 object* cons(object* car, object* cdr); /* forward declaration */
 object* car(object* pair);
 object* cdr(object* pair);
+
 
 char is_nil(object* obj) {
     return obj == nil;
@@ -170,6 +242,8 @@ object* make_symbol(char* value) {
     }
     strcpy(obj->data.symbol.value, value);
     symtab = cons(obj, symtab);
+
+    push(the_vm, obj);
     return obj;
 }
 
@@ -183,6 +257,7 @@ object* make_fixnum(long value) {
     obj = alloc_object();
     obj->type = FIXNUM;
     obj->data.fixnum.value = value;
+    push(the_vm, obj);
     return obj;
 }
 
@@ -196,6 +271,7 @@ object* make_flonum(double value) {
     obj = alloc_object();
     obj->type = FLONUM;
     obj->data.flonum.value = value;
+    push(the_vm, obj);
     return obj;
 }
 
@@ -1280,6 +1356,9 @@ object* make_environment(void) {
 }
 
 void init(void) {
+
+    the_vm = newVM();
+
     nil = alloc_object();
     nil->type = THE_NIL;
 

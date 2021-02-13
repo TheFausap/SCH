@@ -29,6 +29,9 @@
 (define (cdddar x) (cdr (cdr (cdr (car x)))))
 (define (cddddr x) (cdr (cdr (cdr (cdr x)))))
 
+(define true #t)
+(define false #f)
+
 (define (length items)
   (define (iter a count)
     (if (null? a)
@@ -63,5 +66,8 @@
 
 (define (not x)
   (if x #f #t))
+
+(define display write)
+(define newline (lambda () (write-char #\newline)))
 
 'stdlib-loaded 
