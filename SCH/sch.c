@@ -28,14 +28,15 @@
 #define add_procedure(scheme_name, c_name)    \
     define_var(make_symbol(scheme_name),      \
                     make_primitive(c_name),   \
-                    the_global);
+                    env);
 
  /**************************** MODEL ******************************/
 
 typedef enum {
     BOOLEAN, FIXNUM, CHARACTER, FLONUM,
     CPXNUM, STRING, PAIR, THE_NIL, SYMBOL,
-    PRIMITIVE_PROC
+    PRIMITIVE_PROC, COMPOUND_PROC, INPUT_PORT,
+    OUTPUT_PORT, EOF_OBJECT
 } object_type;
 
 #if defined(_MSC_VER)
@@ -75,6 +76,18 @@ typedef struct object {
         struct {
             struct object* (*fn)(struct object* args);
         } primitive_proc;
+        struct {
+            struct object* params;
+            struct object* body;
+            struct object* env;
+            /* TODO: keys, and optional like COMMON LISP */
+        } compound_proc;
+        struct {
+            FILE* stream;
+        } input_port;
+        struct {
+            FILE* stream;
+        } output_port;
     } data;
 } object;
 
@@ -102,7 +115,15 @@ object* set_symbol;
 object* define_symbol;
 object* ok_symbol;
 object* if_symbol;
+object* lambda_symbol;
+object* begin_symbol;
+object* cond_symbol;
+object* else_symbol;
+object* let_symbol;
+object* and_symbol;
+object* or_symbol;
 
+object* eof_object;
 object* the_empty;
 object* the_global;
 
@@ -353,8 +374,16 @@ object* is_pair_proc(object* arguments) {
     return is_pair(car(arguments)) ? true : false;
 }
 
+char is_compound_proc(object* obj); /* forward declaration */
+
 object* is_procedure_proc(object* arguments) {
-    return is_primitive(car(arguments)) ? true : false;
+    object* obj;
+
+    obj = car(arguments);
+    return (is_primitive(obj) ||
+            is_compound_proc(obj)) ?
+              true :
+              false;
 }
 
 object* char_to_integer_proc(object* arguments) {
@@ -827,6 +856,253 @@ object* is_eq_proc(object* arguments) {
     }
 }
 
+object* apply_proc(object* arguments) {
+    fprintf(stderr, "*** illegal state: The body of the apply "
+        "primitive procedure should not execute.\n");
+    exit(1);
+}
+
+object* interaction_environment_proc(object* arguments) {
+    return the_global;
+}
+
+object* setup_env(void);
+
+object* null_environment_proc(object* arguments) {
+    return setup_env();
+}
+
+object* make_environment(void);
+
+object* environment_proc(object* arguments) {
+    return make_environment();
+}
+
+object* eval_proc(object* arguments) {
+    fprintf(stderr, "*** illegal state: The body of the eval "
+        "primitive procedure should not execute.\n");
+    exit(1);
+}
+
+object* sread(FILE* in);
+
+object* eval(object* exp, object* env);
+
+object* load_proc(object* arguments) {
+    char* filename;
+    FILE* in;
+    object* exp;
+    object* result;
+
+    result = alloc_object();
+    filename = car(arguments)->data.string.value;
+    in = fopen(filename, "r");
+    if (in == NULL) {
+        fprintf(stderr, "*** could not load file \"%s\"", filename);
+        exit(1);
+    }
+    while ((exp = sread(in)) != NULL) {
+        result = eval(exp, the_global);
+    }
+    fclose(in);
+    printf("program-loaded\n");
+    return result;
+}
+
+object* make_input_port(FILE* in);
+
+object* open_input_port_proc(object* arguments) {
+    char* filename;
+    FILE* in;
+
+    filename = car(arguments)->data.string.value;
+    in = fopen(filename, "r");
+    if (in == NULL) {
+        fprintf(stderr, "*** could not open file \"%s\"\n", filename);
+        exit(1);
+    }
+    return make_input_port(in);
+}
+
+object* close_input_port_proc(object* arguments) {
+    int result;
+
+    result = fclose(car(arguments)->data.input_port.stream);
+    if (result == EOF) {
+        fprintf(stderr, "*** could not close input port\n");
+        exit(1);
+    }
+    return ok_symbol;
+}
+
+char is_input_port(object* obj);
+
+object* is_input_port_proc(object* arguments) {
+    return is_input_port(car(arguments)) ? true : false;
+}
+
+object* read_proc(object* arguments) {
+    FILE* in;
+    object* result;
+
+    in = is_nil(arguments) ?
+        stdin :
+        car(arguments)->data.input_port.stream;
+    result = sread(in);
+    return (result == NULL) ? eof_object : result;
+}
+
+object* read_char_proc(object* arguments) {
+    FILE* in;
+    int result;
+
+    in = is_nil(arguments) ?
+        stdin :
+        car(arguments)->data.input_port.stream;
+    result = getc(in);
+    return (result == EOF) ? eof_object : make_character(result);
+}
+
+int peek(FILE* in);
+
+object* peek_char_proc(object* arguments) {
+    FILE* in;
+    int result;
+
+    in = is_nil(arguments) ?
+        stdin :
+        car(arguments)->data.input_port.stream;
+    result = peek(in);
+    return (result == EOF) ? eof_object : make_character(result);
+}
+
+char is_eof_object(object* obj);
+
+object* is_eof_object_proc(object* arguments) {
+    return is_eof_object(car(arguments)) ? true : false;
+}
+
+object* make_output_port(FILE* in);
+
+object* open_output_port_proc(object* arguments) {
+    char* filename;
+    FILE* out;
+
+    filename = car(arguments)->data.string.value;
+    out = fopen(filename, "w");
+    if (out == NULL) {
+        fprintf(stderr, "*** could not open file \"%s\"\n", filename);
+        exit(1);
+    }
+    return make_output_port(out);
+}
+
+object* close_output_port_proc(object* arguments) {
+    int result;
+
+    result = fclose(car(arguments)->data.output_port.stream);
+    if (result == EOF) {
+        fprintf(stderr, "*** could not close output port\n");
+        exit(1);
+    }
+    return ok_symbol;
+}
+
+char is_output_port(object* obj);
+
+object* is_output_port_proc(object* arguments) {
+    return is_output_port(car(arguments)) ? true : false;
+}
+
+object* write_char_proc(object* arguments) {
+    object* character;
+    FILE* out;
+
+    character = car(arguments);
+    arguments = cdr(arguments);
+    out = is_nil(arguments) ?
+        stdout :
+        car(arguments)->data.output_port.stream;
+    putc(character->data.character.value, out);
+    fflush(out);
+    return ok_symbol;
+}
+
+void swrite(FILE* out, object* obj);
+
+object* write_proc(object* arguments) {
+    object* exp;
+    FILE* out;
+
+    exp = car(arguments);
+    arguments = cdr(arguments);
+    out = is_nil(arguments) ?
+        stdout :
+        car(arguments)->data.output_port.stream;
+    swrite(out, exp);
+    fflush(out);
+    return ok_symbol;
+}
+
+object* error_proc(object* arguments) {
+    while (!is_nil(arguments)) {
+        swrite(stderr, car(arguments));
+        fprintf(stderr, " ");
+        arguments = cdr(arguments);
+    };
+    printf("\n*** exiting\n");
+    exit(1);
+}
+
+object* make_compound_proc(object* params, object* body,
+    object* env) {
+    object* obj;
+
+    obj = alloc_object();
+    obj->type = COMPOUND_PROC;
+    obj->data.compound_proc.params = params;
+    obj->data.compound_proc.body = body;
+    obj->data.compound_proc.env = env;
+    return obj;
+}
+
+char is_compound_proc(object* obj) {
+    return obj->type == COMPOUND_PROC;
+}
+
+object* make_input_port(FILE* stream) {
+    object* obj;
+
+    obj = alloc_object();
+    obj->type = INPUT_PORT;
+    obj->data.input_port.stream = stream;
+    return obj;
+}
+
+char is_input_port(object* obj) {
+    return obj->type == INPUT_PORT;
+}
+
+object* make_output_port(FILE* stream) {
+    object* obj;
+
+    obj = alloc_object();
+    obj->type = OUTPUT_PORT;
+    obj->data.output_port.stream = stream;
+    return obj;
+}
+
+char is_output_port(object* obj) {
+    return obj->type == OUTPUT_PORT;
+}
+
+char is_eof_object(object* obj) {
+    return obj == eof_object;
+}
+
+
+/****** FINISH PROCS *********/
+
 object* enclosing_env(object* env) {
     return cdr(env);
 }
@@ -873,7 +1149,7 @@ object* lookup_var_val(object* var, object* env) {
         }
         env = enclosing_env(env);
     }
-    fprintf(stderr, "*** unbound variable\n");
+    fprintf(stderr, "*** unbound variable, %s\n", var->data.symbol.value);
     exit(1);
 }
 
@@ -896,7 +1172,7 @@ void set_var_val(object* var, object* val, object* env) {
         }
         env = enclosing_env(env);
     }
-    fprintf(stderr, "*** unbound variable\n");
+    fprintf(stderr, "*** unbound variable, %s\n", var->data.symbol.value);
     exit(1);
 }
 
@@ -930,28 +1206,7 @@ object* setup_env(void) {
     return initial_env;
 }
 
-void init(void) {
-    nil = alloc_object();
-    nil->type = THE_NIL;
-
-    false = alloc_object();
-    false->type = BOOLEAN;
-    false->data.boolean.value = 0;
-
-    true = alloc_object();
-    true->type = BOOLEAN;
-    true->data.boolean.value = 1;
-
-    symtab = nil;
-    quote_symbol = make_symbol("quote");
-    define_symbol = make_symbol("define");
-    set_symbol = make_symbol("set!");
-    ok_symbol = make_symbol("ok");
-    if_symbol = make_symbol("if");
-
-    the_empty = nil;
-
-    the_global = setup_env();
+void populate_environment(object* env) {
 
     /* Primitive functions */
     add_procedure("null?", is_null_proc);
@@ -990,6 +1245,72 @@ void init(void) {
     add_procedure("list", list_proc);
 
     add_procedure("eq?", is_eq_proc);
+
+    add_procedure("apply", apply_proc);
+
+    add_procedure("interaction-environment",
+        interaction_environment_proc);
+    add_procedure("null-environment", null_environment_proc);
+    add_procedure("environment", environment_proc);
+    add_procedure("eval", eval_proc);
+
+    add_procedure("load", load_proc);
+    add_procedure("open-input-port", open_input_port_proc);
+    add_procedure("close-input-port", close_input_port_proc);
+    add_procedure("input-port?", is_input_port_proc);
+    add_procedure("read", read_proc);
+    add_procedure("read-char", read_char_proc);
+    add_procedure("peek-char", peek_char_proc);
+    add_procedure("eof-object?", is_eof_object_proc);
+    add_procedure("open-output-port", open_output_port_proc);
+    add_procedure("close-output-port", close_output_port_proc);
+    add_procedure("output-port?", is_output_port_proc);
+    add_procedure("write-char", write_char_proc);
+    add_procedure("write", write_proc);
+
+    add_procedure("error", error_proc);
+}
+
+object* make_environment(void) {
+    object* env;
+
+    env = setup_env();
+    populate_environment(env);
+    return env;
+}
+
+void init(void) {
+    nil = alloc_object();
+    nil->type = THE_NIL;
+
+    false = alloc_object();
+    false->type = BOOLEAN;
+    false->data.boolean.value = 0;
+
+    true = alloc_object();
+    true->type = BOOLEAN;
+    true->data.boolean.value = 1;
+
+    symtab = nil;
+    quote_symbol = make_symbol("quote");
+    define_symbol = make_symbol("define");
+    set_symbol = make_symbol("set!");
+    ok_symbol = make_symbol("ok");
+    if_symbol = make_symbol("if");
+    lambda_symbol = make_symbol("lambda");
+    begin_symbol = make_symbol("begin");
+    cond_symbol = make_symbol("cond");
+    else_symbol = make_symbol("else");
+    let_symbol = make_symbol("let");
+    and_symbol = make_symbol("and");
+    or_symbol = make_symbol("or");
+
+    eof_object = alloc_object();
+    eof_object->type = EOF_OBJECT;
+
+    the_empty = nil;
+
+    the_global = make_environment();
 }
 
 /***************************** READ ******************************/
@@ -1186,8 +1507,6 @@ object* read_complex(FILE* in) {
     return make_cpxnum(re, im);
 }
 
-object* sread(FILE* in); /* forward declaration */
-
 object* read_pair(FILE* in) {
     int c;
     object* car_obj;
@@ -1362,6 +1681,9 @@ object* sread(FILE* in) {
     else if (c == '\'') {
         return cons(quote_symbol, cons(sread(in), nil));
     }
+    else if (c == EOF) {
+        return NULL;
+    }
     else {
         fprintf(stderr, "bad input. Unexpected '%c'\n", c);
         exit(1);
@@ -1422,11 +1744,31 @@ char is_definition(object* exp) {
 }
 
 object* definition_var(object* exp) {
-    return cadr(exp);
+    if (is_symbol(cadr(exp))) {
+        return cadr(exp);
+    }
+    else {
+        return caadr(exp);
+    }
 }
 
+object* make_lambda(object* params, object* body); /* forward declaration */
+
 object* definition_val(object* exp) {
-    return caddr(exp);
+    if (is_symbol(cadr(exp))) {
+        return caddr(exp);
+    }
+    else {
+        return make_lambda(cdadr(exp), cddr(exp));
+    }
+}
+
+object* make_if(object* predicate, object* consequent,
+    object* alternative) {
+    return cons(if_symbol,
+        cons(predicate,
+            cons(consequent,
+                cons(alternative, nil))));
 }
 
 char is_if(object* exp) {
@@ -1450,8 +1792,115 @@ object* if_alt(object* exp) {
     }
 }
 
+object* make_lambda(object* params, object* body) {
+    return cons(lambda_symbol, cons(params, body));
+}
+
+char is_lambda(object* exp) {
+    return is_tagged_list(exp, lambda_symbol);
+}
+
+object* lambda_params(object* exp) {
+    return cadr(exp);
+}
+
+object* lambda_body(object* exp) {
+    return cddr(exp);
+}
+
+object* make_begin(object* seq) {
+    return cons(begin_symbol, seq);
+}
+
+char is_last_exp(object* seq) {
+    return is_nil(cdr(seq));
+}
+
+object* first_exp(object* seq) {
+    return car(seq);
+}
+
+object* rest_exps(object* seq) {
+    return cdr(seq);
+}
+
+char is_cond(object* exp) {
+    return is_tagged_list(exp, cond_symbol);
+}
+
+object* cond_clauses(object* exp) {
+    return cdr(exp);
+}
+
+object* cond_predicate(object* clause) {
+    return car(clause);
+}
+
+object* cond_actions(object* clause) {
+    return cdr(clause);
+}
+
+char is_cond_else_clause(object* clause) {
+    return cond_predicate(clause) == else_symbol;
+}
+
+object* sequence_to_exp(object* seq) {
+    if (is_nil(seq)) {
+        return seq;
+    }
+    else if (is_last_exp(seq)) {
+        return first_exp(seq);
+    }
+    else {
+        return make_begin(seq);
+    }
+}
+
+object* expand_clauses(object* clauses) {
+    object* first;
+    object* rest;
+
+    if (is_nil(clauses)) {
+        return false;
+    }
+    else {
+        first = car(clauses);
+        rest = cdr(clauses);
+        if (is_cond_else_clause(first)) {
+            if (is_nil(rest)) {
+                return sequence_to_exp(cond_actions(first));
+            }
+            else {
+                fprintf(stderr, "*** else clause isn't last cond->if");
+                exit(1);
+            }
+        }
+        else {
+            return make_if(cond_predicate(first),
+                sequence_to_exp(cond_actions(first)),
+                expand_clauses(rest));
+        }
+    }
+}
+
+object* cond_to_if(object* exp) {
+    return expand_clauses(cond_clauses(exp));
+}
+
+object* make_application(object* operator, object* operands) {
+    return cons(operator, operands);
+}
+
 char is_application(object* exp) {
     return is_pair(exp);
+}
+
+char is_begin(object* exp) {
+    return is_tagged_list(exp, begin_symbol);
+}
+
+object* begin_actions(object* exp) {
+    return cdr(exp);
 }
 
 object* operator(object* exp) {
@@ -1474,7 +1923,96 @@ object* rest_operands(object* ops) {
     return cdr(ops);
 }
 
-object* eval(object* exp, object* env); /* forward declaration */
+char is_let(object* exp) {
+    return is_tagged_list(exp, let_symbol);
+}
+
+object* let_bindings(object* exp) {
+    return cadr(exp);
+}
+
+object* let_body(object* exp) {
+    return cddr(exp);
+}
+
+object* binding_parameter(object* binding) {
+    return car(binding);
+}
+
+object* binding_argument(object* binding) {
+    return cadr(binding);
+}
+
+object* bindings_parameters(object* bindings) {
+    return is_nil(bindings) ?
+        nil :
+        cons(binding_parameter(car(bindings)),
+            bindings_parameters(cdr(bindings)));
+}
+
+object* bindings_arguments(object* bindings) {
+    return is_nil(bindings) ?
+        nil :
+        cons(binding_argument(car(bindings)),
+            bindings_arguments(cdr(bindings)));
+}
+
+object* let_parameters(object* exp) {
+    return bindings_parameters(let_bindings(exp));
+}
+
+object* let_arguments(object* exp) {
+    return bindings_arguments(let_bindings(exp));
+}
+
+object* let_to_application(object* exp) {
+    return make_application(
+        make_lambda(let_parameters(exp),
+            let_body(exp)),
+        let_arguments(exp));
+}
+
+char is_and(object* exp) {
+    return is_tagged_list(exp, and_symbol);
+}
+
+object* and_tests(object* exp) {
+    return cdr(exp);
+}
+
+char is_or(object* exp) {
+    return is_tagged_list(exp, or_symbol);
+}
+
+object* or_tests(object* exp) {
+    return cdr(exp);
+}
+
+object* apply_operator(object* arguments) {
+    return car(arguments);
+}
+
+object* prepare_apply_operands(object* arguments) {
+    if (is_nil(cdr(arguments))) {
+        return car(arguments);
+    }
+    else {
+        return cons(car(arguments),
+            prepare_apply_operands(cdr(arguments)));
+    }
+}
+
+object* apply_operands(object* arguments) {
+    return prepare_apply_operands(cdr(arguments));
+}
+
+object* eval_expression(object* arguments) {
+    return car(arguments);
+}
+
+object* eval_environment(object* arguments) {
+    return cadr(arguments);
+}
 
 object* list_of_values(object* exps, object* env) {
     if (is_no_operands(exps)) {
@@ -1500,6 +2038,7 @@ object* eval_def(object* exp, object* env) {
 object* eval(object* exp, object* env) {
     object* proc;
     object* args;
+    object* result;
 
 tailcall:
     if (is_self_eval(exp)) {
@@ -1523,10 +2062,86 @@ tailcall:
             if_alt(exp);
         goto tailcall;
     }
+    else if (is_lambda(exp)) {
+        return make_compound_proc(lambda_params(exp),
+            lambda_body(exp), env);
+    }
+    else if (is_begin(exp)) {
+        exp = begin_actions(exp);
+        while (!is_last_exp(exp)) {
+            eval(first_exp(exp), env);
+            exp = rest_exps(exp);
+        }
+        exp = first_exp(exp);
+        goto tailcall;
+    }
+    else if (is_cond(exp)) {
+        exp = cond_to_if(exp); /* according to SICP */
+        goto tailcall;
+    }
+    else if (is_let(exp)) {
+        exp = let_to_application(exp);
+        goto tailcall;
+    }
+    else if (is_and(exp)) {
+        exp = and_tests(exp);
+        if (is_nil(exp)) {
+            return true;
+        }
+        while (!is_last_exp(exp)) {
+            result = eval(first_exp(exp), env);
+            if (is_false(result)) {
+                return result;
+            }
+            exp = rest_exps(exp);
+        }
+        exp = first_exp(exp);
+        goto tailcall;
+    }
+    else if (is_or(exp)) {
+        exp = or_tests(exp);
+        if (is_nil(exp)) {
+            return false;
+        }
+        while (!is_last_exp(exp)) {
+            result = eval(first_exp(exp), env);
+            if (is_true(result)) {
+                return result;
+            }
+            exp = rest_exps(exp);
+        }
+        exp = first_exp(exp);
+        goto tailcall;
+    }
     else if (is_application(exp)) {
         proc = eval(operator(exp), env);
         args = list_of_values(operands(exp), env);
-        return (proc->data.primitive_proc.fn)(args);
+
+        /* handle eval specially for tail call requirement */
+        if (is_primitive(proc) &&
+            proc->data.primitive_proc.fn == eval_proc) {
+            exp = eval_expression(args);
+            env = eval_environment(args);
+            goto tailcall;
+        }
+
+        /* handle apply specially for tailcall requirement */
+        if (is_primitive(proc) &&
+            proc->data.primitive_proc.fn == apply_proc) {
+            proc = apply_operator(args);
+            args = apply_operands(args);
+        }
+        
+        if (is_primitive(proc)) {
+            return (proc->data.primitive_proc.fn)(args);
+        }
+        else if (is_compound_proc(proc)) {
+            env = extend_env(proc->data.compound_proc.params,
+                args,
+                proc->data.compound_proc.env);
+            exp = make_begin(proc->data.compound_proc.body);
+            goto tailcall;
+        }
     }
     else {
         fprintf(stderr, "*** cannot eval unknown expression type\n");
@@ -1537,99 +2152,110 @@ tailcall:
 }
 
 /**************************** PRINT ******************************/
-void swrite(object* obj); /* forward declaration */
 
-void write_pair(object* pair) {
+void write_pair(FILE* out, object* pair) {
     object* car_obj;
     object* cdr_obj;
 
     car_obj = car(pair);
     cdr_obj = cdr(pair);
-    swrite(car_obj);
+    swrite(out, car_obj);
     if (cdr_obj->type == PAIR) { /* nested pairs/lists */
-        printf(" ");
-        write_pair(cdr_obj);
+        fprintf(out, " ");
+        write_pair(out, cdr_obj);
     }
     else if (cdr_obj->type == THE_NIL) {
         return;
     }
     else {
-        printf(" . ");
-        swrite(cdr_obj);
+        fprintf(out, " . ");
+        swrite(out, cdr_obj);
     }
 }
 
-void swrite(object* obj) {
+void swrite(FILE* out, object* obj) {
     char c;
     char* str;
 
     switch (obj->type) {
     case THE_NIL:
-        printf("()");
+        fprintf(out, "()");
         break;
     case BOOLEAN:
-        printf("#%c", is_false(obj) ? 'f' : 't');
+        fprintf(out, "#%c", is_false(obj) ? 'f' : 't');
         break;
     case SYMBOL:
-        printf("%s", obj->data.symbol.value);
+        fprintf(out, "%s", obj->data.symbol.value);
         break;
     case FIXNUM:
-        printf("%ld", obj->data.fixnum.value);
+        fprintf(out, "%ld", obj->data.fixnum.value);
         break;
     case FLONUM:
-        printf("%lf", obj->data.flonum.value);
+        fprintf(out, "%lf", obj->data.flonum.value);
         break;
     case CPXNUM:
         if (cimag(obj->data.cpxnum.value) == 0.0) {
-            printf("%lf", creal(obj->data.cpxnum.value));
+            fprintf(out, "%lf", creal(obj->data.cpxnum.value));
         }
         else {
-            printf("#C(%lf %lf)", creal(obj->data.cpxnum.value),
+            fprintf(out, "#C(%lf %lf)", creal(obj->data.cpxnum.value),
                 cimag(obj->data.cpxnum.value));
         }
         break;
     case STRING:
         str = obj->data.string.value;
-        putchar('"');
+        putc('"', out);
         while (*str != '\0') {
             switch (*str) {
             case '\n':
-                printf("\\n");
+                fprintf(out, "\\n");
                 break;
             case '\\':
-                printf("\\\\");
+                fprintf(out, "\\\\");
                 break;
             case '"':
-                printf("\\\"");
+                fprintf(out, "\\\"");
                 break;
             default:
-                putchar(*str);
+                putc(*str, out);
             }
             str++;
         }
-        putchar('"');
+        putc('"', out);
         break;
     case CHARACTER:
         c = obj->data.character.value;
-        printf("#\\");
+        fprintf(out, "#\\");
         switch (c) {
         case '\n':
-            printf("newl");
+            fprintf(out, "newl");
             break;
         case ' ':
-            printf("space");
+            fprintf(out, "space");
             break;
         default:
-            putchar(c);
+            putc(c, out);
         }
         break;
     case PAIR:
-        printf("(");
-        write_pair(obj);
-        printf(")");
+        fprintf(out, "(");
+        write_pair(out, obj);
+        fprintf(out, ")");
+        break;
+    case COMPOUND_PROC:
+        fprintf(out, "#<comound-procedure: %p>", obj);
         break;
     case PRIMITIVE_PROC:
-        printf("#<procedure: %p>", obj);
+        fprintf(out, "#<primitive-procedure: %p>", obj);
+        break;
+    case INPUT_PORT:
+        fprintf(out, "#<input-port>");
+        break;
+    case OUTPUT_PORT:
+        fprintf(out, "#<output-port>");
+        break;
+    case EOF_OBJECT:
+        fprintf(out, "#<eof>");
         break;
     default:
         fprintf(stderr, "cannot write unknown type\n");
@@ -1640,6 +2266,7 @@ void swrite(object* obj) {
 /***************************** REPL ******************************/
 
 int main(void) {
+    object* exp;
 
     printf("Welcome to Bootstrap Scheme. "
         "Use ctrl-c to exit.\n");
@@ -1648,9 +2275,15 @@ int main(void) {
 
     while (1) {
         printf("> ");
-        swrite(eval(sread(stdin), the_global));
+        exp = sread(stdin);
+        if (exp == NULL) {
+            break;
+        }
+        swrite(stdout, eval(exp, the_global));
         printf("\n");
     }
+
+    printf("Goodbye\n");
 
     return 0;
 }
