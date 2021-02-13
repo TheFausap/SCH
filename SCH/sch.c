@@ -23,8 +23,9 @@
 #include <math.h>
 #include <complex.h>
 
-#define BUFFER_MAX 1000 /* max string length */
-#define STACK_MAX 2048   /* VM Size */
+#define BUFFER_MAX 1000            /* max string length */
+#define STACK_MAX 2048             /* VM Size */
+#define INITIAL_GC_THRESHOLD 1000  /* maximum number of obj to start GC */
 
 #define add_procedure(scheme_name, c_name)    \
     define_var(make_symbol(scheme_name),      \
@@ -95,10 +96,19 @@ typedef struct object {
 } object;
 
 typedef struct {
+    int numObj;
+    int maxObj;
     object* firstObject;
     object* stack[STACK_MAX];
     int stackSize;
 } VM;
+
+VM* the_vm;
+
+object * false;
+object * true;
+object* nil;
+object* symtab;
 
 VM* newVM(void) {
     VM* vm = malloc(sizeof(VM));
@@ -106,6 +116,8 @@ VM* newVM(void) {
     if (vm) {
         vm->stackSize = 0;
         vm->firstObject = NULL;
+        vm->numObj = 0;
+        vm->maxObj = INITIAL_GC_THRESHOLD;
     }
     else {
         fprintf(stderr, "*** cannot allocate VM for the stack\n");
@@ -143,9 +155,6 @@ void mark(object* obj) {
         mark(obj->data.pair.car);
         mark(obj->data.pair.cdr);
     }
-    else if (obj->type == PRIMITIVE_PROC) {
-        mark(obj->data.primitive_proc.fn);
-    }
     else if (obj->type == COMPOUND_PROC) {
         mark(obj->data.compound_proc.body);
         mark(obj->data.compound_proc.env);
@@ -159,8 +168,61 @@ void markAll(VM* vm) {
     }
 }
 
+void sweep(VM* vm) {
+    object** obj = &vm->firstObject;
+    while (*obj) {
+        if (!(*obj)->marked) {
+            /* This obj wasn't reached so remove it from the list */
+            object* unreached = *obj;
+            *obj = unreached->next;
+            free(unreached);
+
+            vm->numObj--;
+        }
+        else {
+            /* This obj was reached, so unmark it (for the next GC) */
+            (*obj)->marked = 0;
+            obj = &(*obj)->next;
+        }
+    }
+}
+
+void gc(VM* vm) {
+    int numObj = vm->numObj;
+
+    printf("*** GC: marking %d objects\n", numObj);
+    markAll(vm);
+    printf("*** GC: sweeping\n");
+    sweep(vm);
+
+    vm->maxObj = vm->numObj == 0 ? INITIAL_GC_THRESHOLD : vm->numObj * 2;
+
+    printf("*** GC: collected %d objects, %d remaining.\n", numObj - vm->numObj,
+        vm->numObj);
+}
+
+object* gc_proc(object* dummy) {
+    gc(the_vm);
+    return nil;
+}
+
+object* gc_stats_proc(object* dummy) {
+    printf("*** GARBAGE COLLECTOR STATS ***\n");
+    printf("*** Current number of objs: %d\n", the_vm->numObj);
+    printf("*** Maximum number of objs: %d\n", the_vm->maxObj);
+    return nil;
+}
+
+void freeVM(VM* vm) {
+    vm->stackSize = 0;
+    gc(vm);
+    free(vm);
+}
+
 object* alloc_object(void) {
     object* obj;
+
+    if (the_vm->numObj == the_vm->maxObj) gc(the_vm);
 
     obj = malloc(sizeof(object));
     if (obj == NULL) {
@@ -168,15 +230,14 @@ object* alloc_object(void) {
         exit(1);
     }
     obj->marked = 0;
+    obj->next = the_vm->firstObject;
+    the_vm->numObj++;
     the_vm->firstObject = obj;
 
     return obj;
 }
 
-object * false;
-object * true;
-object* nil;
-object* symtab;
+
 
 /**************** SYMBOL DEFINITION ***********/
 
@@ -196,7 +257,7 @@ object* or_symbol;
 object* eof_object;
 object* the_empty;
 object* the_global;
-VM* the_vm;
+
 
 object* cons(object* car, object* cdr); /* forward declaration */
 object* car(object* pair);
@@ -289,6 +350,7 @@ object* make_cpxnum(double re, double im) {
 #else
     obj->data.cpxnum.value = complex(re, im);
 #endif
+    push(the_vm, obj);
     return obj;
 }
 
@@ -298,6 +360,7 @@ object* make_cpxnum2(sComplex z) {
     obj = alloc_object();
     obj->type = CPXNUM;
     obj->data.cpxnum.value = z;
+    push(the_vm, obj);
     return obj;
 }
 
@@ -311,6 +374,7 @@ object* make_character(char value) {
     obj = alloc_object();
     obj->type = CHARACTER;
     obj->data.character.value = value;
+    push(the_vm, obj);
     return obj;
 }
 
@@ -329,6 +393,7 @@ object* make_string(char* value) {
         exit(1);
     }
     strcpy(obj->data.string.value, value);
+    push(the_vm, obj);
     return obj;
 }
 
@@ -343,6 +408,7 @@ object* cons(object* car, object* cdr) {
     obj->type = PAIR;
     obj->data.pair.car = car;
     obj->data.pair.cdr = cdr;
+    push(the_vm, obj);
     return obj;
 }
 
@@ -401,6 +467,7 @@ object* make_primitive(object* (*fn)(struct object* args)) {
     obj = alloc_object();
     obj->type = PRIMITIVE_PROC;
     obj->data.primitive_proc.fn = fn;
+    push(the_vm, obj);
     return obj;
 }
 
@@ -1345,6 +1412,9 @@ void populate_environment(object* env) {
     add_procedure("write", write_proc);
 
     add_procedure("error", error_proc);
+
+    add_procedure("gc", gc_proc);
+    add_procedure("gc-stats", gc_stats_proc);
 }
 
 object* make_environment(void) {
