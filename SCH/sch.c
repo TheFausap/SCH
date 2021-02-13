@@ -25,6 +25,11 @@
 
 #define BUFFER_MAX 1000 /* max string length */
 
+#define add_procedure(scheme_name, c_name)    \
+    define_var(make_symbol(scheme_name),      \
+                    make_primitive(c_name),   \
+                    the_global);
+
  /**************************** MODEL ******************************/
 
 typedef enum {
@@ -32,6 +37,12 @@ typedef enum {
     CPXNUM, STRING, PAIR, THE_NIL, SYMBOL,
     PRIMITIVE_PROC
 } object_type;
+
+#if defined(_MSC_VER)
+typedef _Dcomplex sComplex;
+#else
+typedef double complex sComplex;
+#endif
 
 typedef struct object {
     object_type type;
@@ -49,11 +60,7 @@ typedef struct object {
             double value;
         } flonum;
         struct {
-#if defined(_MSC_VER)
-            _Dcomplex value; /* MICROSOFT EXTENSION */
-#else
-            double complex value;
-#endif
+            sComplex value;
         } cpxnum;
         struct {
             char value;
@@ -188,6 +195,15 @@ object* make_cpxnum(double re, double im) {
     return obj;
 }
 
+object* make_cpxnum2(sComplex z) {
+    object* obj;
+
+    obj = alloc_object();
+    obj->type = CPXNUM;
+    obj->data.cpxnum.value = z;
+    return obj;
+}
+
 char is_cpxnum(object* obj) {
     return obj->type == CPXNUM;
 }
@@ -295,6 +311,80 @@ char is_primitive(object* obj) {
     return obj->type == PRIMITIVE_PROC;
 }
 
+object* is_null_proc(object* arguments) {
+    return is_nil(car(arguments)) ? true : false;
+}
+
+object* is_boolean_proc(object* arguments) {
+    return is_boolean(car(arguments)) ? true : false;
+}
+
+object* is_symbol_proc(object* arguments) {
+    return is_symbol(car(arguments)) ? true : false;
+}
+
+char is_number(object* obj) {
+    return ((obj->type == FIXNUM) ||
+            (obj->type == FLONUM) ||
+            (obj->type == CPXNUM));
+}
+
+object* is_integer_proc(object* arguments) {
+    return is_fixnum(car(arguments)) ? true : false;
+}
+
+object* is_real_proc(object* arguments) {
+    return is_flonum(car(arguments)) ? true : false;
+}
+
+object* is_complex_proc(object* arguments) {
+    return is_number(car(arguments)) ? true : false;
+}
+
+object* is_char_proc(object* arguments) {
+    return is_character(car(arguments)) ? true : false;
+}
+
+object* is_string_proc(object* arguments) {
+    return is_string(car(arguments)) ? true : false;
+}
+
+object* is_pair_proc(object* arguments) {
+    return is_pair(car(arguments)) ? true : false;
+}
+
+object* is_procedure_proc(object* arguments) {
+    return is_primitive(car(arguments)) ? true : false;
+}
+
+object* char_to_integer_proc(object* arguments) {
+    return make_fixnum((car(arguments))->data.character.value);
+}
+
+object* integer_to_char_proc(object* arguments) {
+    return make_character((char)(car(arguments))->data.fixnum.value);
+}
+
+object* number_to_string_proc(object* arguments) {
+    char buffer[100];
+
+    sprintf(buffer, "%ld", (car(arguments))->data.fixnum.value);
+    return make_string(buffer);
+}
+
+object* string_to_number_proc(object* arguments) {
+    /* TODO: Adding FLONUM support */
+    return make_fixnum(atoi((car(arguments))->data.string.value));
+}
+
+object* symbol_to_string_proc(object* arguments) {
+    return make_string((car(arguments))->data.symbol.value);
+}
+
+object* string_to_symbol_proc(object* arguments) {
+    return make_symbol((car(arguments))->data.string.value);
+}
+
 object* add_proc(object* args) {
     long result = 0;
     double dresult = 0;
@@ -329,6 +419,117 @@ object* add_proc(object* args) {
         re += (double)result;
         re += dresult;
         return make_cpxnum(re, im);
+        break;
+    default:
+        return nil;
+    }
+}
+
+object* sub_proc(object* args) {
+    long result = 0;
+    double dresult = 0;
+    double re = 0.0;
+    double im = 0.0;
+    short op_type = 0;
+
+    if (is_fixnum(car(args))) {
+        result = (car(args))->data.fixnum.value;
+    }
+    else if (is_flonum(car(args))) {
+        dresult = (car(args))->data.flonum.value;
+        op_type = 1;
+    }
+    else if (is_cpxnum(car(args))) {
+        re = creal((car(args))->data.cpxnum.value);
+        im = cimag((car(args))->data.cpxnum.value);
+        op_type = 2;
+    }
+    while (!is_nil(args = cdr(args))) {
+        if (is_fixnum(car(args))) {
+            result -= (car(args))->data.fixnum.value;
+        }
+        else if (is_flonum(car(args))) {
+            dresult -= (car(args))->data.flonum.value;
+            op_type = 1;
+        }
+        else if (is_cpxnum(car(args))) {
+            re -= creal((car(args))->data.cpxnum.value);
+            im -= cimag((car(args))->data.cpxnum.value);
+            op_type = 2;
+        }
+    }
+    switch (op_type) {
+    case 0:
+        return make_fixnum(result);
+        break;
+    case 1:
+        dresult += (double)result;
+        return make_flonum(dresult);
+        break;
+    case 2:
+        re += (double)result;
+        re += dresult;
+        return make_cpxnum(re, im);
+        break;
+    default:
+        return nil;
+    }
+}
+
+object* mul_proc(object* args) {
+    long result = 1;
+    double dresult = 1;
+    double re = 1.0;
+    double im = 1.0;
+    sComplex cresult;
+    short op_type = 0;
+    short full_cpx = 1;
+
+    cresult = _Cbuild(1.0, 0.0);
+
+    while (!is_nil(args)) {
+        if (is_fixnum(car(args))) {
+            result *= (car(args))->data.fixnum.value;
+            full_cpx &= 0;
+        }
+        else if (is_flonum(car(args))) {
+            dresult *= (car(args))->data.flonum.value;
+            op_type = 1;
+            full_cpx &= 0;
+        }
+        else if (is_cpxnum(car(args))) {
+#if defined(_MSC_VER)
+            cresult = _Cmulcc(cresult, (car(args))->data.cpxnum.value);
+#else
+            cresult *= (car(args))->data.cpxnum.value;
+#endif
+            op_type = 2;
+            full_cpx &= 1;
+        }
+        args = cdr(args);
+    }
+    switch (op_type) {
+    case 0:
+        return make_fixnum(result);
+        break;
+    case 1:
+        dresult *= (double)result;
+        return make_flonum(dresult);
+        break;
+    case 2:
+        if (full_cpx) {
+            return make_cpxnum2(cresult);
+        }
+        else {
+            re *= (double)result;
+            re *= dresult;
+#if defined(_MSC_VER)
+            cresult = _Cmulcr(cresult, re);
+#else
+            cresult *= re;
+#endif
+            return make_cpxnum2(cresult);
+        }
         break;
     default:
         return nil;
@@ -462,7 +663,27 @@ void init(void) {
     the_global = setup_env();
 
     /* Primitive functions */
-    define_var(make_symbol("+"), make_primitive(add_proc), the_global);
+    add_procedure("null?", is_null_proc);
+    add_procedure("boolean?", is_boolean_proc);
+    add_procedure("symbol?", is_symbol_proc);
+    add_procedure("integer?", is_integer_proc);
+    add_procedure("real?", is_real_proc);
+    add_procedure("complex?", is_complex_proc);
+    add_procedure("char?", is_char_proc);
+    add_procedure("string?", is_string_proc);
+    add_procedure("pair?", is_pair_proc);
+    add_procedure("procedure?", is_procedure_proc);
+
+    add_procedure("char->integer", char_to_integer_proc);
+    add_procedure("integer->char", integer_to_char_proc);
+    add_procedure("number->string", number_to_string_proc);
+    add_procedure("string->number", string_to_number_proc);
+    add_procedure("symbol->string", symbol_to_string_proc);
+    add_procedure("string->symbol", string_to_symbol_proc);
+
+    add_procedure("+", add_proc);
+    add_procedure("-", sub_proc);
+    add_procedure("*", mul_proc);
 }
 
 /***************************** READ ******************************/
@@ -559,7 +780,7 @@ object* read_number(FILE* in) {
     long num = 0;
 
     c = getc(in);
-
+    
     /* read a fixnum */
     if (c == '-') {
         sign = -1;
@@ -726,7 +947,7 @@ object* sread(FILE* in) {
             return false;
         case '\\':
             return read_character(in);
-        case 'c':
+        case 'c': /* LISP STYLE: not so SCHEME */
             return read_complex(in);
         default:
             fprintf(stderr,
@@ -1100,6 +1321,9 @@ void swrite(object* obj) {
         printf("(");
         write_pair(obj);
         printf(")");
+        break;
+    case PRIMITIVE_PROC:
+        printf("#<procedure: %p>", obj);
         break;
     default:
         fprintf(stderr, "cannot write unknown type\n");
