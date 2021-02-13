@@ -536,6 +536,297 @@ object* mul_proc(object* args) {
     }
 }
 
+object* quotient_proc(object* arguments) {
+    return make_fixnum(
+        ((car(arguments))->data.fixnum.value) /
+        ((cadr(arguments))->data.fixnum.value));
+}
+
+object* remainder_proc(object* arguments) {
+    return make_fixnum(
+        ((car(arguments))->data.fixnum.value) %
+        ((cadr(arguments))->data.fixnum.value));
+}
+
+sComplex cinv(sComplex z1) {
+    return _Cmulcr(conj(z1), 1.0/pow(cabs(z1),2));
+}
+
+object* div_proc(object* args) {
+    double result = 1.0;
+    double dresult = 1.0;
+    double re = 1.0;
+    double im = 1.0;
+    sComplex cresult;
+    short op_type = 0;
+    short full_cpx = 1;
+
+    cresult = _Cbuild(1.0, 0.0);
+
+    if (is_fixnum(car(args))) {
+        result = (double)(car(args))->data.fixnum.value;
+        full_cpx &= 0;
+    }
+    else if (is_flonum(car(args))) {
+        dresult = (car(args))->data.flonum.value;
+        op_type = 1;
+        full_cpx &= 0;
+    }
+    else if (is_cpxnum(car(args))) {
+        cresult = (car(args))->data.cpxnum.value;
+        op_type = 2;
+        full_cpx &= 1;
+    }
+
+    while (!is_nil(args = cdr(args))) {
+        if (is_fixnum(car(args))) {
+            result /= (double)(car(args))->data.fixnum.value;
+            full_cpx &= 0;
+        }
+        else if (is_flonum(car(args))) {
+            dresult /= (car(args))->data.flonum.value;
+            op_type = 1;
+            full_cpx &= 0;
+        }
+        else if (is_cpxnum(car(args))) {
+            cresult = _Cmulcc(cresult, cinv((car(args))->data.cpxnum.value));
+            op_type = 2;
+            full_cpx &= 1;
+        }
+    }
+
+    switch (op_type) {
+    case 0:
+        return make_fixnum((long)result);
+        break;
+    case 1:
+        dresult *= result;
+        return make_flonum(dresult);
+        break;
+    case 2:
+        if (full_cpx) {
+            return make_cpxnum2(cresult);
+        }
+        else {
+            re *= result;
+            re *= dresult;
+#if defined(_MSC_VER)
+            cresult = _Cmulcr(cresult, re);
+#else
+            cresult *= re;
+#endif
+            return make_cpxnum2(cresult);
+        }
+        break;
+    default:
+        return nil;
+    }
+}
+
+object* is_numbeq_proc(object* arguments) {
+    long value = 0;
+    double dvalue = 0.0;
+    double re = 0.0;
+    double im = 0.0;
+    object_type type;
+    
+    type = (car(arguments))->type;
+
+    switch (type) {
+    case FIXNUM:
+        value = (car(arguments))->data.fixnum.value;
+        break;
+    case FLONUM:
+        dvalue = (car(arguments))->data.flonum.value;
+        break;
+    default:
+        re = creal((car(arguments))->data.cpxnum.value);
+        im = cimag((car(arguments))->data.cpxnum.value);
+    }
+    
+    while (!is_nil(arguments = cdr(arguments))) {
+        if (type != (car(arguments))->type) {
+            /* cannot compare different number types */
+            return false;
+        }
+        switch (type) {
+        case FIXNUM:
+            if (value != ((car(arguments))->data.fixnum.value)) {
+                return false;
+            }
+            break;
+        case FLONUM:
+            if (dvalue != ((car(arguments))->data.flonum.value)) {
+                return false;
+            }
+            break;
+        default:
+            if ((re != creal((car(arguments))->data.cpxnum.value)) &&
+                (im != cimag((car(arguments))->data.cpxnum.value))) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+object* is_lessthan_proc(object* arguments) {
+    double previous;
+    double next;
+    object_type type;
+
+    type = (car(arguments))->type;
+
+    switch (type) {
+    case FIXNUM:
+        previous = (double)(car(arguments))->data.fixnum.value;
+        break;
+    case FLONUM:
+        previous = (car(arguments))->data.flonum.value;
+        break;
+    default:
+        fprintf(stderr, "*** comparison is not defined for this type\n");
+        exit(1);
+    }
+    
+    while (!is_nil(arguments = cdr(arguments))) {
+        type = (car(arguments))->type;
+
+        switch (type) {
+        case FIXNUM:
+            next = (double)(car(arguments))->data.fixnum.value;
+            break;
+        case FLONUM:
+            next = (car(arguments))->data.fixnum.value;
+            break;
+        default:
+            fprintf(stderr, "*** comparison is not defined for this type\n");
+            exit(1);
+        }
+        
+        if (previous < next) {
+            previous = next;
+        }
+        else {
+            return false;
+        }
+    }
+    return true;
+}
+
+object* is_greatthan_proc(object* arguments) {
+    double previous;
+    double next;
+    object_type type;
+
+    type = (car(arguments))->type;
+
+    switch (type) {
+    case FIXNUM:
+        previous = (double)(car(arguments))->data.fixnum.value;
+        break;
+    case FLONUM:
+        previous = (car(arguments))->data.flonum.value;
+        break;
+    default:
+        fprintf(stderr, "*** comparison is not defined for this type\n");
+        exit(1);
+    }
+
+    while (!is_nil(arguments = cdr(arguments))) {
+        type = (car(arguments))->type;
+
+        switch (type) {
+        case FIXNUM:
+            next = (double)(car(arguments))->data.fixnum.value;
+            break;
+        case FLONUM:
+            next = (car(arguments))->data.fixnum.value;
+            break;
+        default:
+            fprintf(stderr, "*** comparison is not defined for this type\n");
+            exit(1);
+        }
+
+        if (previous > next) {
+            previous = next;
+        }
+        else {
+            return false;
+        }
+    }
+    return true;
+}
+
+object* cons_proc(object* arguments) {
+    return cons(car(arguments), cadr(arguments));
+}
+
+object* car_proc(object* arguments) {
+    return caar(arguments);
+}
+
+object* cdr_proc(object* arguments) {
+    return cdar(arguments);
+}
+
+object* set_car_proc(object* arguments) {
+    set_car(car(arguments), cadr(arguments));
+    return ok_symbol;
+}
+
+object* set_cdr_proc(object* arguments) {
+    set_cdr(car(arguments), cadr(arguments));
+    return ok_symbol;
+}
+
+object* list_proc(object* arguments) {
+    return arguments;
+}
+
+object* is_eq_proc(object* arguments) {
+    object* obj1;
+    object* obj2;
+
+    obj1 = car(arguments);
+    obj2 = cadr(arguments);
+
+    if (obj1->type != obj2->type) {
+        return false;
+    }
+    switch (obj1->type) {
+    case FIXNUM:
+        return (obj1->data.fixnum.value ==
+            obj2->data.fixnum.value) ?
+            true : false;
+        break;
+    case FLONUM:
+        return (obj1->data.flonum.value ==
+            obj2->data.flonum.value) ?
+            true : false;
+        break;
+    case CPXNUM:
+        return ((creal(obj1->data.cpxnum.value) == 
+                 creal(obj2->data.cpxnum.value))   &&
+                (cimag(obj1->data.cpxnum.value) ==
+                 cimag(obj2->data.cpxnum.value)))
+            ? true : false;
+        break;
+    case CHARACTER:
+        return (obj1->data.character.value ==
+            obj2->data.character.value) ?
+            true : false;
+        break;
+    case STRING:
+        return (strcmp(obj1->data.string.value,
+            obj2->data.string.value) == 0) ?
+            true : false;
+        break;
+    default:
+        return (obj1 == obj2) ? true : false;
+    }
+}
+
 object* enclosing_env(object* env) {
     return cdr(env);
 }
@@ -684,6 +975,21 @@ void init(void) {
     add_procedure("+", add_proc);
     add_procedure("-", sub_proc);
     add_procedure("*", mul_proc);
+    add_procedure("/", div_proc);
+    add_procedure("quotient", quotient_proc);
+    add_procedure("remainder", remainder_proc);
+    add_procedure("=", is_numbeq_proc);
+    add_procedure("<", is_lessthan_proc);
+    add_procedure(">", is_greatthan_proc);
+
+    add_procedure("cons", cons_proc);
+    add_procedure("car", car_proc);
+    add_procedure("cdr", cdr_proc);
+    add_procedure("set-car!", set_car_proc);
+    add_procedure("set-cdr!", set_cdr_proc);
+    add_procedure("list", list_proc);
+
+    add_procedure("eq?", is_eq_proc);
 }
 
 /***************************** READ ******************************/
